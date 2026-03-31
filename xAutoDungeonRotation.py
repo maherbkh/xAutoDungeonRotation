@@ -12,7 +12,7 @@ import shutil
 import time
 
 pName = 'xAutoDungeonRotation'
-pVersion = '3.0.8'
+pVersion = '3.0.9'
 
 GITHUB_OWNER = "maherbkh"
 GITHUB_REPO = "xAutoDungeonRotation"
@@ -197,16 +197,16 @@ fgw_spot3 = QtBind.createCheckBox(gui, "cb_fgw3_clicked", "🔴 Inactive", 140, 
 
 QtBind.createLabel(gui, "──────────────────────────────", 5, 277)
 
-# ===== LIVE STATUS DASHBOARD =====
+# ===== LIVE STATUS DASHBOARD (timers on left) =====
 lblTime = QtBind.createLabel(gui, "⚔️ HoW: 00:00:00", 25, 292)
 lblTime2 = QtBind.createLabel(gui, "🔥 FGW: 00:00:00", 160, 292)
-btnStart = QtBind.createButton(gui, "btn_start_rotation", "✅ START", 25, 317)
-btnStop = QtBind.createButton(gui, "btn_stop_rotation", "⛔ STOP", 120, 317)
-btnPause = QtBind.createButton(gui, "btn_pause_rotation", "⏸ PAUSE", 200, 317)
-QtBind.createLabel(gui, "══════════════════════════════", 5, 347)
-# ===== Log =====
+QtBind.createLabel(gui, "══════════════════════════════", 5, 322)
+# ===== Log (shorter — room for START / STOP / PAUSE underneath) =====
 QtBind.createLabel(gui, "Plugin Log:", 280, 3)
-lstLog = QtBind.createList(gui, 280, 25, 350, 260) 
+lstLog = QtBind.createList(gui, 280, 25, 350, 158)
+btnStart = QtBind.createButton(gui, "btn_start_rotation", "✅ START", 288, 192)
+btnStop = QtBind.createButton(gui, "btn_stop_rotation", "⛔ STOP", 408, 192)
+btnPause = QtBind.createButton(gui, "btn_pause_rotation", "⏸ PAUSE", 528, 192) 
 # ===== RIGHT SIDE =====
 vr = f"Version:{pVersion}"; QtBind.createLabel(gui, vr, 555, 5)
 btnUpdate = QtBind.createButton(gui, "btn_update", "🔄 UPDATE 🔄", 630, 1)
