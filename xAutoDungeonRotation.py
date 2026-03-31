@@ -12,11 +12,13 @@ import shutil
 import time
 
 pName = 'xAutoDungeonRotation'
-pVersion = '3.0.7'
+pVersion = '3.0.8'
 
 GITHUB_OWNER = "maherbkh"
 GITHUB_REPO = "xAutoDungeonRotation"
 GITHUB_RELEASES_LATEST_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+# When no GitHub Release exists, raw files are read from this ref (branch head).
+GITHUB_REF_FALLBACK = "refs/heads/master"
 GITHUB_UA = "xAutoDungeonRotation/phBot-plugin"
 
 # Cached tag from releases/latest (invalidated after a successful self-update)
@@ -27,7 +29,7 @@ def _invalidate_release_cache():
     _release_tag_cache = None
 
 def get_latest_release_tag(force_refresh=False):
-    """Tag name of the latest published GitHub Release (e.g. v3.0.7)."""
+    """Tag name of the latest published GitHub Release (e.g. v3.0.7), or None."""
     global _release_tag_cache
     if not force_refresh and _release_tag_cache:
         return _release_tag_cache
@@ -46,6 +48,16 @@ def get_latest_release_tag(force_refresh=False):
         pass
     return None
 
+def resolve_source_ref(force_refresh_release=False):
+    """
+    Prefer latest GitHub Release tag; if none, use default branch head (raw.githubusercontent).
+    Returns (ref, kind) e.g. ('v3.0.8', 'release') or ('refs/heads/master', 'branch').
+    """
+    tag = get_latest_release_tag(force_refresh=force_refresh_release)
+    if tag:
+        return tag, "release"
+    return GITHUB_REF_FALLBACK, "branch"
+
 def tag_to_version(tag):
     """Release tag -> version string for compare (leading 'v' stripped)."""
     t = str(tag).strip()
@@ -53,9 +65,9 @@ def tag_to_version(tag):
         t = t[1:].strip()
     return t
 
-def raw_file_at_release_tag(relpath, tag):
+def raw_file_at_ref(relpath, ref):
     path = relpath.lstrip("/")
-    return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{tag}/{path}"
+    return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{ref}/{path}"
 
 def parse_pversion_from_source(py_code):
     m = re.search(r"^\s*pVersion\s*=\s*(['\"])([^'\"]+)\1", py_code, re.MULTILINE)
@@ -66,30 +78,30 @@ def parse_pversion_from_source(py_code):
         return m.group(1).strip()
     return None
 
-def fetch_plugin_from_latest_release(force_refresh_tag=False):
+def fetch_plugin_from_github(force_refresh_release=False):
     """
-    Download xAutoDungeonRotation.py from the latest Release tag.
+    Download xAutoDungeonRotation.py from latest Release tag, or from branch head if no Release.
     Returns (remote_pVersion, full_source) or (None, None).
     """
-    tag = get_latest_release_tag(force_refresh=force_refresh_tag)
-    if not tag:
-        return None, None
-    url = raw_file_at_release_tag("xAutoDungeonRotation.py", tag)
+    ref, kind = resolve_source_ref(force_refresh_release=force_refresh_release)
+    url = raw_file_at_ref("xAutoDungeonRotation.py", ref)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": GITHUB_UA})
         with urllib.request.urlopen(req, timeout=45) as w:
             py_code = w.read().decode("utf-8")
     except Exception:
         return None, None
-    ver = parse_pversion_from_source(py_code) or tag_to_version(tag)
+    ver = parse_pversion_from_source(py_code)
+    if not ver and kind == "release":
+        ver = tag_to_version(ref)
     return ver, py_code
 
 def fgw_star_script_url(star):
-    """Raw URL for FGW shipwreck script on the same Release tag as the plugin."""
-    tag = get_latest_release_tag()
-    if not tag or star not in (1, 2, 3, 4):
+    """Raw URL for FGW script — same ref as plugin (Release tag or branch head)."""
+    if star not in (1, 2, 3, 4):
         return None
-    return raw_file_at_release_tag(f"FGW_SHIPWRECK_{star}_STAR.txt", tag)
+    ref, _ = resolve_source_ref()
+    return raw_file_at_ref(f"FGW_SHIPWRECK_{star}_STAR.txt", ref)
 
 # Legacy: update checker still expects pUrl set (used only for "defined" guard)
 pUrl = GITHUB_RELEASES_LATEST_API
@@ -346,10 +358,11 @@ def compare_version(current, remote):
 
 def btn_update():
     global pVersion
-    add_log("🔎 Checking GitHub Releases (latest)…")
-    latest_version, new_code = fetch_plugin_from_latest_release(force_refresh_tag=True)
+    ref, kind = resolve_source_ref(force_refresh_release=True)
+    add_log(f"🔎 Update from GitHub ({kind}: {ref})…")
+    latest_version, new_code = fetch_plugin_from_github(force_refresh_release=False)
     if not latest_version or not new_code:
-        add_log("❌ No release / could not download plugin. Create a GitHub Release with the .py and tags.")
+        add_log("❌ Could not download plugin from GitHub.")
         return
     if not compare_version(pVersion, latest_version):
         add_log("✔ Plugin already up to date.")
@@ -363,7 +376,7 @@ def btn_update():
         with open(current_file, "w", encoding="utf-8") as f:
             f.write(new_code)
         _invalidate_release_cache()
-        add_log(f"✅ Updated successfully to v{latest_version} (from latest Release)")
+        add_log(f"✅ Updated to v{latest_version} ({kind})")
         add_log("♻ Please reload the plugin.")
     except Exception as e:
         add_log("❌ Update failed:")
@@ -637,7 +650,7 @@ def save_selected():
             return
         script_url = fgw_star_script_url(star)
         if not script_url:
-            add_log("❌ FGW: could not resolve latest GitHub Release (needed for script URLs).")
+            add_log("❌ FGW: could not build script URL (invalid star?).")
             return
         script_body = get_remote_script(script_url)
     else:
@@ -715,17 +728,20 @@ def report(a):
 
 def check():
     global pVersion
-    add_log("🔎 Checking GitHub Releases (latest)…")
-    tag = get_latest_release_tag(force_refresh=True)
-    if not tag:
-        add_log("⚠ No published Release found (updates/FGW scripts use Releases).")
-        return
-    latest_version = tag_to_version(tag)
+    ref, kind = resolve_source_ref(force_refresh_release=True)
+    add_log(f"🔎 GitHub source: {kind} — {ref}")
+    if kind == "release":
+        latest_version = tag_to_version(ref)
+    else:
+        latest_version, _ = fetch_plugin_from_github(force_refresh_release=False)
+        if not latest_version:
+            add_log("⚠ Could not fetch plugin from branch for version check.")
+            return
     if compare_version(pVersion, latest_version):
-        add_log("🔔 There is a new version on GitHub Releases 🔔")
+        add_log("🔔 Newer version available on GitHub 🔔")
     else:
         add_log("✔ Plugin already up to date.")
-        return
+    return
 
 if os.path.exists(getPath()):
     check()
