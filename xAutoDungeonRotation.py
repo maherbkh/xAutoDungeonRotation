@@ -12,7 +12,7 @@ import shutil
 import time
 
 pName = 'xAutoDungeonRotation'
-pVersion = '3.0.6'
+pVersion = '3.0.7'
 
 GITHUB_OWNER = "maherbkh"
 GITHUB_REPO = "xAutoDungeonRotation"
