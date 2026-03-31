@@ -11,7 +11,18 @@ import time
 
 pName = 'xAutoDungeonRotation'
 pVersion = '3.0.6'
-pUrl = 'https://raw.githubusercontent.com/maherbkh/xAutoDungeonRotation/master/xAutoDungeonRotation.py'
+
+# Single Git ref for raw.githubusercontent.com (same as git show-ref: refs/heads/<branch>)
+GITHUB_OWNER = "maherbkh"
+GITHUB_REPO = "xAutoDungeonRotation"
+GITHUB_REF = "refs/heads/master"
+
+def _github_raw(relpath):
+    """Build raw URL for a file on the configured ref (Update + FGW scripts stay in sync)."""
+    path = relpath.lstrip("/")
+    return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_REF}/{path}"
+
+pUrl = _github_raw("xAutoDungeonRotation.py")
 NewestVersion = 0
 
 gui = QtBind.init(__name__, pName)
@@ -157,12 +168,11 @@ def cb_fgw3_clicked(c): update_rotation("FGW", 3, fgw_spot3, c)
 def get_mode():
     return CURRENT_MODE
 
-FGW_STAR_REPO_BASE = "https://raw.githubusercontent.com/maherbkh/xAutoDungeonRotation/master/"
 FGW_STAR_RAW_URLS = {
-    1: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_1_STAR.txt",
-    2: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_2_STAR.txt",
-    3: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_3_STAR.txt",
-    4: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_4_STAR.txt",
+    1: _github_raw("FGW_SHIPWRECK_1_STAR.txt"),
+    2: _github_raw("FGW_SHIPWRECK_2_STAR.txt"),
+    3: _github_raw("FGW_SHIPWRECK_3_STAR.txt"),
+    4: _github_raw("FGW_SHIPWRECK_4_STAR.txt"),
 }
 FGW_STAR_UI_TO_INT = {"1 ★": 1, "2 ★★": 2, "3 ★★★": 3, "4 ★★★★": 4}
 
@@ -263,24 +273,34 @@ def get_latest_version(url):
     try:
         req = urllib.request.Request(url, headers={'User-Agent': "Mozilla/5.0"})
         with urllib.request.urlopen(req) as w:
-            pyCode = str(w.read().decode("utf-8"))
-            if re.search("\npVersion = [0-9.'\"]*", pyCode):
-                return re.search("\npVersion = ([0-9a-zA-Z.'\"]*)", pyCode).group(0)[13:-1], pyCode
-    except:
+            pyCode = w.read().decode("utf-8")
+        m = re.search(r"^\s*pVersion\s*=\s*(['\"])([^'\"]+)\1", pyCode, re.MULTILINE)
+        if m:
+            return m.group(2).strip(), pyCode
+        m = re.search(r"^\s*pVersion\s*=\s*([0-9.]+)\s*(?:#|$)", pyCode, re.MULTILINE)
+        if m:
+            return m.group(1).strip(), pyCode
+    except Exception:
         pass
     return None, None
 
-def compare_version(a, b):
-    a = tuple(map(int, a.split(".")))
-    b = tuple(map(int, b.split(".")))
-    return a < b
+def compare_version(current, remote):
+    def _parts(ver):
+        out = []
+        for x in str(ver).strip().split("."):
+            try:
+                out.append(int(x))
+            except ValueError:
+                out.append(0)
+        return tuple(out)
+    return _parts(current) < _parts(remote)
 
 def btn_update():
     global pVersion, pUrl
     if not pUrl:
         add_log("❌ No update URL defined.")
         return
-    add_log("🔎 Checking for updates...")
+    add_log(f"🔎 Checking updates ({GITHUB_REF})…")
     latest_version, new_code = get_latest_version(pUrl)
     if not latest_version:
         add_log("❌ Could not check version.")
@@ -648,7 +668,7 @@ def check():
     if not pUrl:
         add_log("❌ No update URL defined.")
         return
-    add_log("🔎 Checking for updates...")
+    add_log(f"🔎 Checking updates ({GITHUB_REF})…")
     latest_version, new_code = get_latest_version(pUrl)
     if not latest_version:
         add_log("❌ Could not check version.")
