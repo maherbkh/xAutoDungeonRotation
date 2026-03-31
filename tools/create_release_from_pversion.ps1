@@ -33,7 +33,7 @@ if ($env:GITHUB_TOKEN) {
     $body = @{
         tag_name         = $tag
         name             = "xAutoDungeonRotation $ver"
-        body             = "Release **$ver** — matches ``pVersion`` in ``xAutoDungeonRotation.py``."
+        body             = "Release **$ver** - matches pVersion in xAutoDungeonRotation.py."
         generate_release_notes = $true
     } | ConvertTo-Json
     $headers = @{
