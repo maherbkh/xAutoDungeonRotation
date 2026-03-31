@@ -9,9 +9,9 @@ import os
 import shutil
 import time
 
-pName = 'PosRotate'
-pVersion = '3.0.5'
-pUrl = 'https://raw.githubusercontent.com/nmilchev/xPosRotate/refs/heads/main/xPosRotate.py'
+pName = 'xAutoDungeonRotation'
+pVersion = '3.0.6'
+pUrl = 'https://raw.githubusercontent.com/maherbkh/xAutoDungeonRotation/master/xAutoDungeonRotation.py'
 NewestVersion = 0
 
 gui = QtBind.init(__name__, pName)
@@ -71,6 +71,14 @@ QtBind.createLabel(gui, "📍 Position control", 5, 50)
 cbModeHoW = QtBind.createCheckBox(gui, "cbModeHoW_clicked", "🟢 HoW", 30, 75)
 cbModeFGW = QtBind.createCheckBox(gui, "cbModeFGW_clicked", "🔴 FGW", 30, 105)
 QtBind.setChecked(gui, cbModeHoW, True)
+
+QtBind.createLabel(gui, "FGW ★ req.", 125, 108)
+cmb_fgw_star = QtBind.createCombobox(gui, 200, 103, 115, 22)
+QtBind.append(gui, cmb_fgw_star, "— select star —")
+QtBind.append(gui, cmb_fgw_star, "1 ★")
+QtBind.append(gui, cmb_fgw_star, "2 ★★")
+QtBind.append(gui, cmb_fgw_star, "3 ★★★")
+QtBind.append(gui, cmb_fgw_star, "4 ★★★★")
 
 cmb_location = QtBind.createCombobox(gui, 110, 47, 100, 22)
 QtBind.append(gui, cmb_location, "Location 1")
@@ -146,6 +154,20 @@ def cb_fgw3_clicked(c): update_rotation("FGW", 3, fgw_spot3, c)
 
 def get_mode():
     return CURRENT_MODE
+
+FGW_STAR_REPO_BASE = "https://raw.githubusercontent.com/maherbkh/xAutoDungeonRotation/master/"
+FGW_STAR_RAW_URLS = {
+    1: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_1_STAR.txt",
+    2: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_2_STAR.txt",
+    3: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_3_STAR.txt",
+    4: FGW_STAR_REPO_BASE + "FGW_SHIPWRECK_4_STAR.txt",
+}
+FGW_STAR_UI_TO_INT = {"1 ★": 1, "2 ★★": 2, "3 ★★★": 3, "4 ★★★★": 4}
+
+def get_selected_fgw_star():
+    """Returns 1–4 if a real FGW star is chosen; None if placeholder (required not met)."""
+    label = QtBind.text(gui, cmb_fgw_star).strip()
+    return FGW_STAR_UI_TO_INT.get(label)
 
 def cbParty_clicked(checked):
     global _cbParty
@@ -415,6 +437,9 @@ def btn_start_rotation():
     if not rotation_order:
         add_log("❌ No active locations selected.")
         return
+    if mode == "FGW" and get_selected_fgw_star() is None:
+        add_log("❌ FGW: select a star level (required) before starting.")
+        return
     if not has_item:
         add_log(f"❌ Cannot Start: You have 0 {mode} Dimension Holes!")
         return
@@ -508,7 +533,6 @@ def entering():
 
 start = "walk,6428,1108,0"
 URL_HOW = "https://raw.githubusercontent.com/nmilchev/xPosRotate/refs/heads/main/SCRIPT_HOW.txt"
-URL_FGW = "https://raw.githubusercontent.com/nmilchev/xPosRotate/refs/heads/main/SCRIPT_FGW.txt"
 
 def get_remote_script(url):
     try:
@@ -537,18 +561,33 @@ def save_selected():
         add_log("❌ No location selected!")
         return
 
+    if mode == "FGW":
+        star = get_selected_fgw_star()
+        if star is None:
+            add_log("❌ FGW: select a star level (required) before saving.")
+            return
+        script_url = FGW_STAR_RAW_URLS[star]
+        script_body = get_remote_script(script_url)
+    else:
+        script_body = get_remote_script(URL_HOW)
+
+    if not script_body:
+        add_log("❌ Could not download training script body.")
+        return
+
     p = get_position()
     line = f"path,{p['region']},{int(p['x'])},{int(p['y'])},{int(p['z'])}"
 
     filename = f"{name}_{mode}_{selected.replace(' ','_')}.txt"
     filepath = os.path.join(getPath(), filename)
 
-    script_body = get_remote_script(URL_HOW) if mode == "HoW" else get_remote_script(URL_FGW)
-
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(start + "\n" + line + "\n" + script_body)
 
-    add_log(f"💾 Saved {mode} position for {selected}")
+    if mode == "FGW":
+        add_log(f"💾 Saved FGW ★{star} for {selected}")
+    else:
+        add_log(f"💾 Saved {mode} position for {selected}")
 
 # -------------------------
 # Event Loop
