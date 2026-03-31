@@ -1,3 +1,6 @@
+﻿use,Dimension Hole (Shipwreck-★★)
+fgw,teleport
+get_hole
 walk,20781,4377,-782
 walk,20797,4362,-782
 walk,20802,4354,-794
@@ -259,4 +262,7 @@ walk,21781,3804,-989
 walk,21764,3779,-989
 AttackArea2,40
 wait,5000
-
+wait,10000
+use,returnscroll
+report
+stop
