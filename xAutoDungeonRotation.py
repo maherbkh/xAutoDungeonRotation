@@ -4,6 +4,8 @@ from datetime import datetime
 import QtBind
 import phBotChat
 import urllib.request
+import urllib.error
+import json
 import re
 import os
 import shutil
@@ -12,17 +14,85 @@ import time
 pName = 'xAutoDungeonRotation'
 pVersion = '3.0.6'
 
-# Single Git ref for raw.githubusercontent.com (same as git show-ref: refs/heads/<branch>)
 GITHUB_OWNER = "maherbkh"
 GITHUB_REPO = "xAutoDungeonRotation"
-GITHUB_REF = "refs/heads/master"
+GITHUB_RELEASES_LATEST_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+GITHUB_UA = "xAutoDungeonRotation/phBot-plugin"
 
-def _github_raw(relpath):
-    """Build raw URL for a file on the configured ref (Update + FGW scripts stay in sync)."""
+# Cached tag from releases/latest (invalidated after a successful self-update)
+_release_tag_cache = None
+
+def _invalidate_release_cache():
+    global _release_tag_cache
+    _release_tag_cache = None
+
+def get_latest_release_tag(force_refresh=False):
+    """Tag name of the latest published GitHub Release (e.g. v3.0.7)."""
+    global _release_tag_cache
+    if not force_refresh and _release_tag_cache:
+        return _release_tag_cache
+    try:
+        req = urllib.request.Request(
+            GITHUB_RELEASES_LATEST_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": GITHUB_UA},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tag = (data.get("tag_name") or "").strip()
+        if tag:
+            _release_tag_cache = tag
+            return tag
+    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+def tag_to_version(tag):
+    """Release tag -> version string for compare (leading 'v' stripped)."""
+    t = str(tag).strip()
+    if t.lower().startswith("v"):
+        t = t[1:].strip()
+    return t
+
+def raw_file_at_release_tag(relpath, tag):
     path = relpath.lstrip("/")
-    return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_REF}/{path}"
+    return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{tag}/{path}"
 
-pUrl = _github_raw("xAutoDungeonRotation.py")
+def parse_pversion_from_source(py_code):
+    m = re.search(r"^\s*pVersion\s*=\s*(['\"])([^'\"]+)\1", py_code, re.MULTILINE)
+    if m:
+        return m.group(2).strip()
+    m = re.search(r"^\s*pVersion\s*=\s*([0-9.]+)\s*(?:#|$)", py_code, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return None
+
+def fetch_plugin_from_latest_release(force_refresh_tag=False):
+    """
+    Download xAutoDungeonRotation.py from the latest Release tag.
+    Returns (remote_pVersion, full_source) or (None, None).
+    """
+    tag = get_latest_release_tag(force_refresh=force_refresh_tag)
+    if not tag:
+        return None, None
+    url = raw_file_at_release_tag("xAutoDungeonRotation.py", tag)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": GITHUB_UA})
+        with urllib.request.urlopen(req, timeout=45) as w:
+            py_code = w.read().decode("utf-8")
+    except Exception:
+        return None, None
+    ver = parse_pversion_from_source(py_code) or tag_to_version(tag)
+    return ver, py_code
+
+def fgw_star_script_url(star):
+    """Raw URL for FGW shipwreck script on the same Release tag as the plugin."""
+    tag = get_latest_release_tag()
+    if not tag or star not in (1, 2, 3, 4):
+        return None
+    return raw_file_at_release_tag(f"FGW_SHIPWRECK_{star}_STAR.txt", tag)
+
+# Legacy: update checker still expects pUrl set (used only for "defined" guard)
+pUrl = GITHUB_RELEASES_LATEST_API
 NewestVersion = 0
 
 gui = QtBind.init(__name__, pName)
@@ -168,12 +238,6 @@ def cb_fgw3_clicked(c): update_rotation("FGW", 3, fgw_spot3, c)
 def get_mode():
     return CURRENT_MODE
 
-FGW_STAR_RAW_URLS = {
-    1: _github_raw("FGW_SHIPWRECK_1_STAR.txt"),
-    2: _github_raw("FGW_SHIPWRECK_2_STAR.txt"),
-    3: _github_raw("FGW_SHIPWRECK_3_STAR.txt"),
-    4: _github_raw("FGW_SHIPWRECK_4_STAR.txt"),
-}
 FGW_STAR_UI_TO_INT = {"1 ★": 1, "2 ★★": 2, "3 ★★★": 3, "4 ★★★★": 4}
 
 def get_selected_fgw_star():
@@ -269,21 +333,6 @@ def add_log(text):
     for line in log_buffer:
         QtBind.append(gui, lstLog, line)
 
-def get_latest_version(url):
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as w:
-            pyCode = w.read().decode("utf-8")
-        m = re.search(r"^\s*pVersion\s*=\s*(['\"])([^'\"]+)\1", pyCode, re.MULTILINE)
-        if m:
-            return m.group(2).strip(), pyCode
-        m = re.search(r"^\s*pVersion\s*=\s*([0-9.]+)\s*(?:#|$)", pyCode, re.MULTILINE)
-        if m:
-            return m.group(1).strip(), pyCode
-    except Exception:
-        pass
-    return None, None
-
 def compare_version(current, remote):
     def _parts(ver):
         out = []
@@ -296,14 +345,11 @@ def compare_version(current, remote):
     return _parts(current) < _parts(remote)
 
 def btn_update():
-    global pVersion, pUrl
-    if not pUrl:
-        add_log("❌ No update URL defined.")
-        return
-    add_log(f"🔎 Checking updates ({GITHUB_REF})…")
-    latest_version, new_code = get_latest_version(pUrl)
-    if not latest_version:
-        add_log("❌ Could not check version.")
+    global pVersion
+    add_log("🔎 Checking GitHub Releases (latest)…")
+    latest_version, new_code = fetch_plugin_from_latest_release(force_refresh_tag=True)
+    if not latest_version or not new_code:
+        add_log("❌ No release / could not download plugin. Create a GitHub Release with the .py and tags.")
         return
     if not compare_version(pVersion, latest_version):
         add_log("✔ Plugin already up to date.")
@@ -316,7 +362,8 @@ def btn_update():
         # Overwrite current plugin
         with open(current_file, "w", encoding="utf-8") as f:
             f.write(new_code)
-        add_log(f"✅ Updated successfully to v{latest_version}")
+        _invalidate_release_cache()
+        add_log(f"✅ Updated successfully to v{latest_version} (from latest Release)")
         add_log("♻ Please reload the plugin.")
     except Exception as e:
         add_log("❌ Update failed:")
@@ -558,9 +605,9 @@ URL_HOW = "https://raw.githubusercontent.com/nmilchev/xPosRotate/refs/heads/main
 
 def get_remote_script(url):
     try:
-        # Use the already imported urllib.request
-        with urllib.request.urlopen(url) as response:
-            return response.read().decode('utf-8')
+        req = urllib.request.Request(url, headers={"User-Agent": GITHUB_UA})
+        with urllib.request.urlopen(req, timeout=45) as response:
+            return response.read().decode("utf-8")
     except Exception as e:
         add_log(f"❌ GitHub Error: {e}")
         return None
@@ -588,7 +635,10 @@ def save_selected():
         if star is None:
             add_log("❌ FGW: select a star level (required) before saving.")
             return
-        script_url = FGW_STAR_RAW_URLS[star]
+        script_url = fgw_star_script_url(star)
+        if not script_url:
+            add_log("❌ FGW: could not resolve latest GitHub Release (needed for script URLs).")
+            return
         script_body = get_remote_script(script_url)
     else:
         script_body = get_remote_script(URL_HOW)
@@ -664,18 +714,16 @@ def report(a):
     return True
 
 def check():
-    global pVersion, pUrl
-    if not pUrl:
-        add_log("❌ No update URL defined.")
+    global pVersion
+    add_log("🔎 Checking GitHub Releases (latest)…")
+    tag = get_latest_release_tag(force_refresh=True)
+    if not tag:
+        add_log("⚠ No published Release found (updates/FGW scripts use Releases).")
         return
-    add_log(f"🔎 Checking updates ({GITHUB_REF})…")
-    latest_version, new_code = get_latest_version(pUrl)
-    if not latest_version:
-        add_log("❌ Could not check version.")
-        return
+    latest_version = tag_to_version(tag)
     if compare_version(pVersion, latest_version):
-        add_log("🔔There is new version available🔔")
-    else: 
+        add_log("🔔 There is a new version on GitHub Releases 🔔")
+    else:
         add_log("✔ Plugin already up to date.")
         return
 
