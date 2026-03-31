@@ -12,7 +12,7 @@ import shutil
 import time
 
 pName = 'xAutoDungeonRotation'
-pVersion = '3.0.9'
+pVersion = '3.1.0'
 
 GITHUB_OWNER = "maherbkh"
 GITHUB_REPO = "xAutoDungeonRotation"
@@ -152,6 +152,177 @@ drop_data = {
 seen_drop_uids = set()
 _cbParty = False
 _cbPlayer = False
+
+# ----- AttackArea2 full clear (JellyBitz xAutoDungeon-style mob recount) -----
+# Recounts mobs in a fixed circle around the script position until none remain (handles
+# delayed unique spawns, e.g. after Envy). Optional filters: AttackArea2_filters.json in
+# plugin folder — same keys as xAutoDungeon: "Ignore Types", "OnlyCount Types", "Ignore Names".
+CLEAR_MOBS_INTERVAL = 1.0
+ATTACK_AREA_STABLE_EMPTY_TICKS = 2
+_clear_area_state = None
+_clear_area_abort = False
+
+def _attack_area_filters_path():
+    base = getPath()
+    data = get_character_data()
+    if data and data.get("name"):
+        cand = os.path.join(
+            base,
+            "{}_{}_AttackArea2_filters.json".format(data.get("server", "x"), data["name"]),
+        )
+        if os.path.isfile(cand):
+            return cand
+    return os.path.join(base, "AttackArea2_filters.json")
+
+def _json_int_list(data, key):
+    out = []
+    raw = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return out
+    for x in raw:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+def _load_attack_area_filters():
+    ignore_types, only_types, ignore_names = [], [], []
+    path = _attack_area_filters_path()
+    if not os.path.isfile(path):
+        return ignore_types, only_types, ignore_names
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ignore_types = _json_int_list(data, "Ignore Types")
+        only_types = _json_int_list(data, "OnlyCount Types")
+        if isinstance(data.get("Ignore Names"), list):
+            ignore_names = [str(x) for x in data["Ignore Names"] if x]
+    except Exception:
+        pass
+    return ignore_types, only_types, ignore_names
+
+def _mob_distance(ax, ay, bx, by):
+    return round(((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5, 2)
+
+def _list_contains_ci(text, lst):
+    if not text or not lst:
+        return False
+    t = text.lower()
+    return any(t == n.lower() for n in lst)
+
+def _count_mobs_at_anchor(ax, ay, radius, ignore_types, only_types, ignore_names):
+    monsters = get_monsters()
+    if not monsters:
+        return 0
+    n = 0
+    for mob in monsters.values():
+        if not mob:
+            continue
+        t = mob.get("type")
+        if ignore_types and t in ignore_types:
+            continue
+        if only_types and t not in only_types:
+            continue
+        name = mob.get("name") or ""
+        if _list_contains_ci(name, ignore_names):
+            continue
+        try:
+            mx = float(mob["x"])
+            my = float(mob["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if _mob_distance(ax, ay, mx, my) > radius:
+            continue
+        n += 1
+    return n
+
+def _clear_area_tick():
+    global _clear_area_state, _clear_area_abort
+    if _clear_area_abort:
+        st_abort = _clear_area_state
+        _clear_area_state = None
+        _clear_area_abort = False
+        if st_abort and st_abort.get("started"):
+            stop_bot()
+            set_training_position(0, 0, 0, 0)
+        return
+    if _clear_area_state is None:
+        return
+    st = _clear_area_state
+    p = st["position"]
+    r = float(st["radius"])
+    ig_t = st.get("ignore_types") or []
+    oc_t = st.get("only_types") or []
+    ig_n = st.get("ignore_names") or []
+    c = _count_mobs_at_anchor(float(p["x"]), float(p["y"]), r, ig_t, oc_t, ig_n)
+    if c > 0:
+        st["empty_streak"] = 0
+        if not st.get("started"):
+            stop_bot()
+            try:
+                set_training_position(int(p["region"]), int(p["x"]), int(p["y"]), int(p["z"]))
+            except (TypeError, ValueError):
+                set_training_position(p.get("region", 0), p["x"], p["y"], p["z"])
+            set_training_radius(float(r))
+            st["started"] = True
+            start_bot()
+        if c != st.get("last_logged_c"):
+            st["last_logged_c"] = c
+            add_log(f"xADR AttackArea2: {c} mob(s) in r={r}m (anchor)…")
+        Timer(CLEAR_MOBS_INTERVAL, _clear_area_tick).start()
+        return
+    st["empty_streak"] = int(st.get("empty_streak") or 0) + 1
+    if st["empty_streak"] < ATTACK_AREA_STABLE_EMPTY_TICKS:
+        Timer(CLEAR_MOBS_INTERVAL, _clear_area_tick).start()
+        return
+    add_log(f"xADR AttackArea2: cleared (r={r}m). Resuming…")
+    _clear_area_state = None
+    stop_bot()
+    set_training_position(0, 0, 0, 0)
+    px, py, pz = float(p["x"]), float(p["y"]), float(p["z"])
+    Timer(2.5, lambda: move_to(px, py, pz)).start()
+    Timer(5.0, start_bot).start()
+
+def AttackArea2(args):
+    """
+    Replaces default AttackArea2: keep training on script line position until mob count
+    in radius is zero (with stable empty checks for delayed spawns). Radius from arg[1], default 60.
+    """
+    global _clear_area_state, _clear_area_abort
+    if _clear_area_state is not None:
+        return 0
+    radius = 60.0
+    if len(args) >= 2:
+        try:
+            radius = float(str(args[1]).strip())
+        except ValueError:
+            pass
+    pos = get_position()
+    if not pos or "x" not in pos:
+        return 0
+    ig_t, oc_t, ig_n = _load_attack_area_filters()
+    ax, ay = float(pos["x"]), float(pos["y"])
+    c = _count_mobs_at_anchor(ax, ay, radius, ig_t, oc_t, ig_n)
+    if c == 0:
+        return 0
+    _clear_area_state = {
+        "position": {
+            "region": pos.get("region", 0),
+            "x": pos["x"],
+            "y": pos["y"],
+            "z": pos.get("z", 0),
+        },
+        "radius": radius,
+        "started": False,
+        "empty_streak": 0,
+        "ignore_types": ig_t,
+        "only_types": oc_t,
+        "ignore_names": ig_n,
+    }
+    add_log(f"xADR AttackArea2: start full clear r={radius}m ({c} mob(s)).")
+    Timer(0.001, _clear_area_tick).start()
+    return 0
 
 # ===== HEADER BAR =====
 QtBind.createLabel(gui, "══════════════════════════════", 5, 5)
@@ -542,7 +713,8 @@ def btn_start_rotation():
     add_log("▶ Rotation started.")
 
 def btn_stop_rotation():
-    global ENABLED, paused
+    global ENABLED, paused, _clear_area_abort
+    _clear_area_abort = True
     stop_bot()
     paused = False
     ENABLED = False
@@ -572,6 +744,8 @@ def start_training(location_name):
         add_log(f"🔴🔴🔴 Opps, Seems we cant can't start.")
 
 def load_training_script(location_name):
+    global _clear_area_abort
+    _clear_area_abort = True
     data = get_character_data()
     if not data:
         add_log("❌ Not in game.")
